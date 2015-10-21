@@ -51,6 +51,7 @@ int called_first = 0; // check first ps called
 /* valiables tob change the I/O priority */
 pid_t old_dispatch_pid = 0; // last dispatch pid
 pid_t minimum_freq_pid; // minimum the number of Read requests
+unsigned long old_jiffies = 0;
 /*
  * offset from end of service tree
  */
@@ -957,21 +958,30 @@ static inline void cfq_schedule_dispatch(struct cfq_data *cfqd)
 void minimum_freq_change(void){
   int i;
   int minimum_freq;
+  unsigned long change_minimum_freq_interval;
+  pid_t tmp_minimum_freq_pid;
+  int read_number;
+
+  change_minimum_freq_interval = jiffies - old_jiffies;
+  old_jiffies = jiffies;
 
   if(called_first)
     i = 1;
   else
     i = 0;
   minimum_freq = count_read[i];
-  minimum_freq_pid = count_pid[i];
+  tmp_minimum_freq_pid = count_pid[i];
 
   while(i <= count_num){
     if(count_read[i] < minimum_freq){
       minimum_freq = count_read[i];
-      minimum_freq_pid = count_pid[i];
+      tmp_minimum_freq_pid = count_pid[i];
     }
     i++;
   }
+  read_number = minimum_freq / change_minimum_freq_interval;
+  if(read_number < 10)
+    minimum_freq_pid = tmp_minimum_freq_pid;
   called_first = 1;
   count_num = 0;
 }
