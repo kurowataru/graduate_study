@@ -954,16 +954,31 @@ static inline void cfq_schedule_dispatch(struct cfq_data *cfqd)
 	}
 }
 
+int read_diff_check(int minimum_freq,pid_t minimum_freq_pid,unsigned long interval){
+  int i;
+  int diff = 0;
+  if(called_first)
+    i = 1;
+  else
+    i = 0;
+  while(i <= count_num){
+    if(count_pid[i] != minimum_freq_pid){
+      diff = (count_read[i] - minimum_freq) / interval;
+      //printk(KERN_INFO"pid = %d, diff = %d",count_pid[i],diff);
+      if(diff < 10) return 0;
+    }
+    i++;  
+  }
+  return 1;
+}
 /* minimum freq change */
 void minimum_freq_change(void){
   int i;
   int minimum_freq;
+  int check; // If check = 1, minimum pid change. If check = 0, minimum pid do not change.
   unsigned long change_minimum_freq_interval;
   pid_t tmp_minimum_freq_pid;
-  int read_number;
-
-  change_minimum_freq_interval = jiffies - old_jiffies;
-  old_jiffies = jiffies;
+  //int read_number;
 
   if(called_first)
     i = 1;
@@ -979,11 +994,21 @@ void minimum_freq_change(void){
     }
     i++;
   }
-  read_number = minimum_freq / change_minimum_freq_interval;
-  if(read_number < 10)
-    minimum_freq_pid = tmp_minimum_freq_pid;
-  called_first = 1;
-  count_num = 0;
+  change_minimum_freq_interval = jiffies - old_jiffies;
+  old_jiffies = jiffies;
+  check = read_diff_check(minimum_freq,tmp_minimum_freq_pid,change_minimum_freq_interval);
+  //printk(KERN_INFO"check = %d",check);
+  //printk(KERN_INFO"---------------------------------");
+  if(check){
+    //read_number = minimum_freq / change_minimum_freq_interval;
+    //if(read_number < 10)
+      minimum_freq_pid = tmp_minimum_freq_pid;
+    called_first = 1;
+    count_num = 0;
+  }else{
+    called_first = 1;
+    count_num = 0;
+  }
 }
 /*
  * Scale schedule slice based on io priority. Use the sync time slice only
