@@ -965,7 +965,7 @@ int read_diff_check(int minimum_freq,pid_t minimum_freq_pid,unsigned long interv
     if(count_pid[i] != minimum_freq_pid){
       diff = (count_read[i] - minimum_freq) / interval;
       //printk(KERN_INFO"pid = %d, diff = %d",count_pid[i],diff);
-      if(diff < 10) return 0;
+      if(diff < 5) return 0;
     }
     i++;  
   }
@@ -2936,12 +2936,13 @@ static void cfq_dispatch_insert(struct request_queue *q, struct request *rq)
 	struct cfq_data *cfqd = q->elevator->elevator_data;
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
 
-  if(old_dispatch_pid != cfqq->pid || cfqq->pid == 0){
+  /*if(old_dispatch_pid != cfqq->pid || cfqq->pid == 0){
+    printk(KERN_INFO"dispatch pid = %d\n",cfqq->pid);
     old_dispatch_pid = cfqq->pid;
-    if(count_num >= 5) minimum_freq_change();
-  }
+    if(count_num > 5) minimum_freq_change();
+  }*/
   if(cfqq->pid == minimum_freq_pid){
-    rq->ioprio = IOPRIO_CLASS_RT;
+    cfqq->ioprio = IOPRIO_CLASS_RT;
   }
 
 	cfq_log_cfqq(cfqd, cfqq, "dispatch_insert");
@@ -4877,3 +4878,9 @@ module_exit(cfq_exit);
 MODULE_AUTHOR("Jens Axboe");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Completely Fair Queueing IO scheduler");
+
+SYSCALL_DEFINE1(change_prio_pid,int __user *, pid){
+  get_user(minimum_freq_pid,pid);
+  printk(KERN_INFO"change prio pid = %d",minimum_freq_pid);
+  return 0;
+}
