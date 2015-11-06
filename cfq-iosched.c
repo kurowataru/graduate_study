@@ -24,6 +24,7 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/nmi.h>
+#include <linux/sched.h>
 /*
  * tunables
  */
@@ -44,7 +45,6 @@ static const int cfq_hist_divisor = 4;
 /* valiables to check the number of I/O requests */
 #define PIDMAX 32768
 int count_read[PIDMAX+1]; // check the Read request
-int count_write[PIDMAX+1]; // check the Write request
 int count_num; // check array index
 pid_t count_pid[PIDMAX+1]; // check pid
 int called_first = 0; // check first ps called
@@ -2941,8 +2941,8 @@ static void cfq_dispatch_insert(struct request_queue *q, struct request *rq)
     old_dispatch_pid = cfqq->pid;
     if(count_num > 5) minimum_freq_change();
   }*/
-  if(cfqq->pid == minimum_freq_pid){
-    cfqq->ioprio = IOPRIO_CLASS_RT;
+  if(cfqq->pid == minimum_freq_pid && minimum_freq_pid != 0){
+    cfqq->ioprio_class = IOPRIO_CLASS_RT;
   }
 
 	cfq_log_cfqq(cfqd, cfqq, "dispatch_insert");
@@ -4095,6 +4095,7 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
   int i = 0;
   struct request *tmp;
+  struct task_struct *task;
   tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
   *tmp = *rq;
 
@@ -4108,37 +4109,35 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 				 rq->cmd_flags);
 	cfq_rq_enqueued(cfqd, cfqq, rq);
 
-  while(count_pid[i] != cfqq->pid && i < count_num) i++;
-  if(count_pid[i] == cfqq->pid){
-    while(tmp->bio != rq->biotail){
-      if(rq_is_sync(rq))
-        count_read[i]++;
-      else
-        count_write[i]++;
-      tmp->bio = tmp->bio->bi_next;
+  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
+  task = find_task_by_vpid(cfqq->pid);
+  if(task != NULL && task->cred->uid.val != 0){
+    while(count_pid[i] != cfqq->pid && i < count_num) i++;
+    if(count_pid[i] == cfqq->pid){
+      while(tmp->bio != rq->biotail){
+        if(rq_is_sync(rq))
+          count_read[i]++;
+        tmp->bio = tmp->bio->bi_next;
+      }
+    }else{
+      count_num++;
+      count_pid[count_num] = cfqq->pid;
+      while(tmp->bio != rq->biotail){
+        if(rq_is_sync(rq))
+          count_read[count_num]++;
+        tmp->bio = tmp->bio->bi_next;
+      }
     }
-  }else{
-    count_num++;
-    count_pid[count_num] = cfqq->pid;
-    while(tmp->bio != rq->biotail){
-      if(rq_is_sync(rq))
-        count_read[count_num]++;
-      else
-        count_write[count_num]++;
-      tmp->bio = tmp->bio->bi_next;
-    }
-  }
 
-  if(rq_is_sync(rq))
-    count_read[count_num]++;
-  else
-    count_write[count_num]++;
+    if(rq_is_sync(rq))
+      count_read[count_num]++;
+  }
 
   if(count_num == PIDMAX){
     if(called_first == 0)
-      printk(KERN_INFO"pid = %d, count_write = %d, count_read = %d\n",count_pid[0],count_write[0],count_read[0]);
+      printk(KERN_INFO"pid = %d, count_read = %d\n",count_pid[0],count_read[0]);
     for(i = 1;i <= count_num;i++)
-      printk(KERN_INFO"pid = %d, count_write = %d, count_read = %d\n",count_pid[i],count_write[i],count_read[i]);
+      printk(KERN_INFO"pid = %d, count_read = %d\n",count_pid[i],count_read[i]);
     count_num = 0;
     called_first = 1;
   }
@@ -4654,7 +4653,6 @@ static int cfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	cfqd->cfq_group_idle = cfq_group_idle;
 	cfqd->cfq_latency = 1;
 	cfqd->hw_tag = -1;
-  count_write[0] = 0;
   count_read[0] = 0;
   count_pid[0] = 0;
   count_num = 0;
