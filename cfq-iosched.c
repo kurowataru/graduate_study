@@ -42,16 +42,6 @@ static int cfq_slice_idle = HZ / 125;
 static int cfq_group_idle = HZ / 125;
 static const int cfq_target_latency = HZ * 3/10; /* 300 ms */
 static const int cfq_hist_divisor = 4;
-/* valiables to check the number of I/O requests */
-#define PIDMAX 32768
-int count_read[PIDMAX+1]; // check the Read request
-int count_num; // check array index
-pid_t count_pid[PIDMAX+1]; // check pid
-int called_first = 0; // check first ps called
-/* valiables tob change the I/O priority */
-pid_t old_dispatch_pid = 0; // last dispatch pid
-pid_t minimum_freq_pid; // minimum the number of Read requests
-unsigned long old_jiffies = 0;
 /*
  * offset from end of service tree
  */
@@ -170,6 +160,10 @@ struct cfq_queue {
 	struct cfq_group *cfqg;
 	/* Number of sectors dispatched from queue in single dispatch round */
 	unsigned long nr_sectors;
+  /* the number of I/O(read) request */
+  int read_io_request;
+  /* the old cpu time of the process */
+  unsigned long old_cpu_time;
 };
 
 /*
@@ -965,50 +959,58 @@ int read_diff_check(int minimum_freq,pid_t minimum_freq_pid,unsigned long interv
     if(count_pid[i] != minimum_freq_pid){
       diff = (count_read[i] - minimum_freq) / interval;
       //printk(KERN_INFO"pid = %d, diff = %d",count_pid[i],diff);
-      if(diff < 5) return 0;
+      //if(diff < 5) return 0;
     }
     i++;  
   }
   return 1;
 }
 /* minimum freq change */
-void minimum_freq_change(void){
-  int i;
-  int minimum_freq;
-  int check; // If check = 1, minimum pid change. If check = 0, minimum pid do not change.
-  unsigned long change_minimum_freq_interval;
-  pid_t tmp_minimum_freq_pid;
+void minimum_freq_change(struct cfq_queue *cfqq){
+  //int i;
+  //int minimum_freq;
+  //int check; // If check = 1, minimum pid change. If check = 0, minimum pid do not change.
+  unsigned long cpu_time_interval,cpu_time;
+  //pid_t tmp_minimum_freq_pid;
   //int read_number;
+  struct task_struct *task;
+  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
+  task = find_task_by_vpid(cfqq->pid);
 
-  if(called_first)
+  cpu_time = task->utime + task->stime;
+
+  /*if(called_first)
     i = 1;
   else
-    i = 0;
-  minimum_freq = count_read[i];
-  tmp_minimum_freq_pid = count_pid[i];
+    i = 0;*/
+  //minimum_freq = count_read[i];
+  //tmp_minimum_freq_pid = count_pid[i];
 
-  while(i <= count_num){
+  /*while(i <= count_num){
     if(count_read[i] < minimum_freq){
       minimum_freq = count_read[i];
       tmp_minimum_freq_pid = count_pid[i];
     }
     i++;
-  }
-  change_minimum_freq_interval = jiffies - old_jiffies;
-  old_jiffies = jiffies;
-  check = read_diff_check(minimum_freq,tmp_minimum_freq_pid,change_minimum_freq_interval);
+  }*/
+
+  cpu_time_interval = cpu_time - cfqq->old_cpu_time;
+  printk(KERN_INFO"interval = %ld,cpu_time = %ld,old_cpu_time = %ld",cpu_time_interval,cpu_time,cfqq->old_cpu_time);
+  cfqq->old_cpu_time = cpu_time;
+  //old_jiffies = jiffies;
+  //check = read_diff_check(minimum_freq,tmp_minimum_freq_pid,change_minimum_freq_interval);
   //printk(KERN_INFO"check = %d",check);
   //printk(KERN_INFO"---------------------------------");
-  if(check){
+  //if(check){
     //read_number = minimum_freq / change_minimum_freq_interval;
     //if(read_number < 10)
-      minimum_freq_pid = tmp_minimum_freq_pid;
+    //  minimum_freq_pid = tmp_minimum_freq_pid;
+    //called_first = 1;
+    //count_num = 0;
+  /*}else{
     called_first = 1;
     count_num = 0;
-  }else{
-    called_first = 1;
-    count_num = 0;
-  }
+  }*/
 }
 /*
  * Scale schedule slice based on io priority. Use the sync time slice only
@@ -2496,6 +2498,24 @@ static void cfq_merged_request(struct request_queue *q, struct request *req,
 {
 	if (type == ELEVATOR_FRONT_MERGE) {
 		struct cfq_queue *cfqq = RQ_CFQQ(req);
+    struct request *tmp;
+    struct task_struct *task;
+
+    tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
+    *tmp = *req;
+    task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
+    task = find_task_by_vpid(cfqq->pid);
+    if(task != NULL && task->cred->euid.val != 0){
+      while(tmp->bio != req->biotail){
+        if(rq_is_sync(req))
+          cfqq->read_io_request++;
+        tmp->bio = tmp->bio->bi_next;
+      }
+      if(rq_is_sync(req))
+        cfqq->read_io_request++;
+      //printk(KERN_INFO"after merged request, read request = %d",cfqq->read_io_request);
+    }
+    kfree(tmp);
 
 		cfq_reposition_rq_rb(cfqq, req);
 	}
@@ -2513,6 +2533,24 @@ cfq_merged_requests(struct request_queue *q, struct request *rq,
 {
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
 	struct cfq_data *cfqd = q->elevator->elevator_data;
+  struct request *tmp;
+  struct task_struct *task;
+
+  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
+  *tmp = *rq;
+  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
+  task = find_task_by_vpid(cfqq->pid);
+  if(task != NULL && task->cred->euid.val != 0){
+    while(tmp->bio != rq->biotail){
+      if(rq_is_sync(rq))
+        cfqq->read_io_request++;
+      tmp->bio = tmp->bio->bi_next;
+    }
+    if(rq_is_sync(rq))
+      cfqq->read_io_request++;
+    //printk(KERN_INFO"after merged request, read request = %d",cfqq->read_io_request);
+  }
+  kfree(tmp);
 
 	/*
 	 * reposition in fifo if next is older than rq
@@ -2935,15 +2973,6 @@ static void cfq_dispatch_insert(struct request_queue *q, struct request *rq)
 {
 	struct cfq_data *cfqd = q->elevator->elevator_data;
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
-
-  /*if(old_dispatch_pid != cfqq->pid || cfqq->pid == 0){
-    printk(KERN_INFO"dispatch pid = %d\n",cfqq->pid);
-    old_dispatch_pid = cfqq->pid;
-    if(count_num > 5) minimum_freq_change();
-  }*/
-  if(cfqq->pid == minimum_freq_pid && minimum_freq_pid != 0){
-    cfqq->ioprio_class = IOPRIO_CLASS_RT;
-  }
 
 	cfq_log_cfqq(cfqd, cfqq, "dispatch_insert");
 
@@ -3690,6 +3719,8 @@ static void cfq_init_cfqq(struct cfq_data *cfqd, struct cfq_queue *cfqq,
 		cfq_mark_cfqq_sync(cfqq);
 	}
 	cfqq->pid = pid;
+  cfqq->read_io_request = 0;
+  cfqq->old_cpu_time = 0;
 }
 
 #ifdef CONFIG_CFQ_GROUP_IOSCHED
@@ -4093,7 +4124,6 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 {
 	struct cfq_data *cfqd = q->elevator->elevator_data;
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
-  int i = 0;
   struct request *tmp;
   struct task_struct *task;
   tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
@@ -4111,37 +4141,26 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 
   task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
   task = find_task_by_vpid(cfqq->pid);
-  if(task != NULL && task->cred->uid.val != 0){
-    while(count_pid[i] != cfqq->pid && i < count_num) i++;
-    if(count_pid[i] == cfqq->pid){
-      while(tmp->bio != rq->biotail){
-        if(rq_is_sync(rq))
-          count_read[i]++;
-        tmp->bio = tmp->bio->bi_next;
-      }
-    }else{
-      count_num++;
-      count_pid[count_num] = cfqq->pid;
-      while(tmp->bio != rq->biotail){
-        if(rq_is_sync(rq))
-          count_read[count_num]++;
-        tmp->bio = tmp->bio->bi_next;
-      }
+  if(task != NULL && task->cred->euid.val != 0){
+    while(tmp->bio != rq->biotail){
+      if(rq_is_sync(rq))
+        cfqq->read_io_request++;
+      tmp->bio = tmp->bio->bi_next;
     }
-
     if(rq_is_sync(rq))
-      count_read[count_num]++;
-  }
-
-  if(count_num == PIDMAX){
-    if(called_first == 0)
-      printk(KERN_INFO"pid = %d, count_read = %d\n",count_pid[0],count_read[0]);
-    for(i = 1;i <= count_num;i++)
-      printk(KERN_INFO"pid = %d, count_read = %d\n",count_pid[i],count_read[i]);
-    count_num = 0;
-    called_first = 1;
+      cfqq->read_io_request++;
+    //printk(KERN_INFO"after insert request, read request = %d",cfqq->read_io_request);
   }
   kfree(tmp);
+
+  /*if(cfqq->read_io_request > 100){
+    minimum_freq_change(cfqq);
+    cfqq->read_io_request = 0;
+  }
+
+  if(cfqq->pid == minimum_freq_pid && minimum_freq_pid != 0){
+    cfqq->ioprio_class = IOPRIO_CLASS_RT;
+  }*/
 }
 
 /*
