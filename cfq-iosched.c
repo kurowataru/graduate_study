@@ -45,6 +45,11 @@ static const int cfq_hist_divisor = 4;
 /*
  * offset from end of service tree
  */
+/* I/O frequency calculation variables */
+int min_freq_pid = 0; // the minimum frequency pid
+#define JUDGE_CPU_TIME 100
+#define JUDGE_FREQUENCY_IO_REQUEST 100
+
 #define CFQ_IDLE_DELAY		(HZ / 5)
 
 /*
@@ -947,70 +952,47 @@ static inline void cfq_schedule_dispatch(struct cfq_data *cfqd)
 		kblockd_schedule_work(&cfqd->unplug_work);
 	}
 }
+/* minimum frequency change */
+void min_freq_change(struct cfq_queue *cfqq,unsigned long interval){
+  int freq_io_request;
 
-int read_diff_check(int minimum_freq,pid_t minimum_freq_pid,unsigned long interval){
-  int i;
-  int diff = 0;
-  if(called_first)
-    i = 1;
-  else
-    i = 0;
-  while(i <= count_num){
-    if(count_pid[i] != minimum_freq_pid){
-      diff = (count_read[i] - minimum_freq) / interval;
-      //printk(KERN_INFO"pid = %d, diff = %d",count_pid[i],diff);
-      //if(diff < 5) return 0;
-    }
-    i++;  
-  }
-  return 1;
+  freq_io_request = cfqq->read_io_request / interval;
+  if(freq_io_request < JUDGE_FREQUENCY_IO_REQUEST) min_freq_pid = cfqq->pid;
 }
-/* minimum freq change */
-void minimum_freq_change(struct cfq_queue *cfqq){
-  //int i;
-  //int minimum_freq;
-  //int check; // If check = 1, minimum pid change. If check = 0, minimum pid do not change.
-  unsigned long cpu_time_interval,cpu_time;
-  //pid_t tmp_minimum_freq_pid;
-  //int read_number;
+
+void count_io_request(struct request *rq){
+	struct cfq_queue *cfqq = RQ_CFQQ(rq);
+  struct request *tmp;
   struct task_struct *task;
+  unsigned long cpu_time_interval,cpu_time;
+  
+  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
+  *tmp = *rq;
   task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
   task = find_task_by_vpid(cfqq->pid);
-
-  cpu_time = task->utime + task->stime;
-
-  /*if(called_first)
-    i = 1;
-  else
-    i = 0;*/
-  //minimum_freq = count_read[i];
-  //tmp_minimum_freq_pid = count_pid[i];
-
-  /*while(i <= count_num){
-    if(count_read[i] < minimum_freq){
-      minimum_freq = count_read[i];
-      tmp_minimum_freq_pid = count_pid[i];
+  
+  if(task != NULL && task->cred->euid.val != 0){
+    cpu_time = task->utime + task->stime;
+    cpu_time_interval = cpu_time - cfqq->old_cpu_time;
+    while(tmp->bio != rq->biotail){
+      if(rq_is_sync(rq))
+        cfqq->read_io_request++;
+      tmp->bio = tmp->bio->bi_next;
     }
-    i++;
-  }*/
+    if(rq_is_sync(rq))
+      cfqq->read_io_request++;
+    kfree(tmp);
 
-  cpu_time_interval = cpu_time - cfqq->old_cpu_time;
-  printk(KERN_INFO"interval = %ld,cpu_time = %ld,old_cpu_time = %ld",cpu_time_interval,cpu_time,cfqq->old_cpu_time);
-  cfqq->old_cpu_time = cpu_time;
-  //old_jiffies = jiffies;
-  //check = read_diff_check(minimum_freq,tmp_minimum_freq_pid,change_minimum_freq_interval);
-  //printk(KERN_INFO"check = %d",check);
-  //printk(KERN_INFO"---------------------------------");
-  //if(check){
-    //read_number = minimum_freq / change_minimum_freq_interval;
-    //if(read_number < 10)
-    //  minimum_freq_pid = tmp_minimum_freq_pid;
-    //called_first = 1;
-    //count_num = 0;
-  /*}else{
-    called_first = 1;
-    count_num = 0;
-  }*/
+    /*if(cpu_time_interval > JUDGE_CPU_TIME){
+      min_freq_change(cfqq,cpu_time_interval);
+      cfqq->read_io_request = 0;
+      cfqq->old_cpu_time = cpu_time;
+    }*/
+  }
+
+  if(cfqq->pid == min_freq_pid && min_freq_pid != 0){
+    cfqq->ioprio_class = IOPRIO_CLASS_RT;
+  }
 }
 /*
  * Scale schedule slice based on io priority. Use the sync time slice only
@@ -2498,24 +2480,7 @@ static void cfq_merged_request(struct request_queue *q, struct request *req,
 {
 	if (type == ELEVATOR_FRONT_MERGE) {
 		struct cfq_queue *cfqq = RQ_CFQQ(req);
-    struct request *tmp;
-    struct task_struct *task;
-
-    tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
-    *tmp = *req;
-    task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
-    task = find_task_by_vpid(cfqq->pid);
-    if(task != NULL && task->cred->euid.val != 0){
-      while(tmp->bio != req->biotail){
-        if(rq_is_sync(req))
-          cfqq->read_io_request++;
-        tmp->bio = tmp->bio->bi_next;
-      }
-      if(rq_is_sync(req))
-        cfqq->read_io_request++;
-      //printk(KERN_INFO"after merged request, read request = %d",cfqq->read_io_request);
-    }
-    kfree(tmp);
+    count_io_request(req);
 
 		cfq_reposition_rq_rb(cfqq, req);
 	}
@@ -2533,25 +2498,8 @@ cfq_merged_requests(struct request_queue *q, struct request *rq,
 {
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
 	struct cfq_data *cfqd = q->elevator->elevator_data;
-  struct request *tmp;
-  struct task_struct *task;
 
-  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
-  *tmp = *rq;
-  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
-  task = find_task_by_vpid(cfqq->pid);
-  if(task != NULL && task->cred->euid.val != 0){
-    while(tmp->bio != rq->biotail){
-      if(rq_is_sync(rq))
-        cfqq->read_io_request++;
-      tmp->bio = tmp->bio->bi_next;
-    }
-    if(rq_is_sync(rq))
-      cfqq->read_io_request++;
-    //printk(KERN_INFO"after merged request, read request = %d",cfqq->read_io_request);
-  }
-  kfree(tmp);
-
+  count_io_request(rq);
 	/*
 	 * reposition in fifo if next is older than rq
 	 */
@@ -4124,10 +4072,8 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 {
 	struct cfq_data *cfqd = q->elevator->elevator_data;
 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
-  struct request *tmp;
-  struct task_struct *task;
-  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
-  *tmp = *rq;
+
+  count_io_request(rq);
 
 	cfq_log_cfqq(cfqd, cfqq, "insert_request");
 	cfq_init_prio_data(cfqq, RQ_CIC(rq));
@@ -4138,29 +4084,6 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
 	cfqg_stats_update_io_add(RQ_CFQG(rq), cfqd->serving_group,
 				 rq->cmd_flags);
 	cfq_rq_enqueued(cfqd, cfqq, rq);
-
-  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
-  task = find_task_by_vpid(cfqq->pid);
-  if(task != NULL && task->cred->euid.val != 0){
-    while(tmp->bio != rq->biotail){
-      if(rq_is_sync(rq))
-        cfqq->read_io_request++;
-      tmp->bio = tmp->bio->bi_next;
-    }
-    if(rq_is_sync(rq))
-      cfqq->read_io_request++;
-    //printk(KERN_INFO"after insert request, read request = %d",cfqq->read_io_request);
-  }
-  kfree(tmp);
-
-  /*if(cfqq->read_io_request > 100){
-    minimum_freq_change(cfqq);
-    cfqq->read_io_request = 0;
-  }
-
-  if(cfqq->pid == minimum_freq_pid && minimum_freq_pid != 0){
-    cfqq->ioprio_class = IOPRIO_CLASS_RT;
-  }*/
 }
 
 /*
@@ -4672,9 +4595,6 @@ static int cfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	cfqd->cfq_group_idle = cfq_group_idle;
 	cfqd->cfq_latency = 1;
 	cfqd->hw_tag = -1;
-  count_read[0] = 0;
-  count_pid[0] = 0;
-  count_num = 0;
 	/*
 	 * we optimistically start assuming sync ops weren't delayed in last
 	 * second, in order to have larger depth for async operations.
@@ -4897,7 +4817,6 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Completely Fair Queueing IO scheduler");
 
 SYSCALL_DEFINE1(change_prio_pid,int __user *, pid){
-  get_user(minimum_freq_pid,pid);
-  printk(KERN_INFO"change prio pid = %d",minimum_freq_pid);
+  get_user(min_freq_pid,pid);
   return 0;
 }
