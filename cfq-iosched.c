@@ -17,14 +17,8 @@
 #include <linux/blk-cgroup.h>
 #include "blk.h"
 
-#include <linux/fs.h>
-#include <linux/types.h>
-#include <linux/file.h>
-#include <linux/syscalls.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
-#include <linux/nmi.h>
 #include <linux/sched.h>
+#include <linux/syscalls.h>
 /*
  * tunables
  */
@@ -42,14 +36,11 @@ static int cfq_slice_idle = HZ / 125;
 static int cfq_group_idle = HZ / 125;
 static const int cfq_target_latency = HZ * 3/10; /* 300 ms */
 static const int cfq_hist_divisor = 4;
+
+int change_freq_pid = 0; // minimum frequency pid
 /*
  * offset from end of service tree
  */
-/* I/O frequency calculation variables */
-int min_freq_pid = 0; // the minimum frequency pid
-#define JUDGE_CPU_TIME 100
-#define JUDGE_FREQUENCY_IO_REQUEST 100
-
 #define CFQ_IDLE_DELAY		(HZ / 5)
 
 /*
@@ -165,10 +156,6 @@ struct cfq_queue {
 	struct cfq_group *cfqg;
 	/* Number of sectors dispatched from queue in single dispatch round */
 	unsigned long nr_sectors;
-  /* the number of I/O(read) request */
-  int read_io_request;
-  /* the old cpu time of the process */
-  unsigned long old_cpu_time;
 };
 
 /*
@@ -952,46 +939,45 @@ static inline void cfq_schedule_dispatch(struct cfq_data *cfqd)
 		kblockd_schedule_work(&cfqd->unplug_work);
 	}
 }
-/* minimum frequency change */
-void min_freq_change(struct cfq_queue *cfqq,unsigned long interval){
-  int freq_io_request;
 
-  freq_io_request = cfqq->read_io_request / interval;
-  if(freq_io_request < JUDGE_FREQUENCY_IO_REQUEST) min_freq_pid = cfqq->pid;
+/* change io frequency */
+void change_io_freq(struct cfq_queue *cfqq,struct task_struct *tsk){
+  if(tsk->change_io_freq_flag == 1){
+    cfqq->ioprio_class = IOPRIO_CLASS_RT;
+  }else{
+    cfqq->ioprio_class = IOPRIO_CLASS_BE;
+  }
 }
-
+/* count io request */
 void count_io_request(struct request *rq){
-	struct cfq_queue *cfqq = RQ_CFQQ(rq);
+  struct cfq_queue *cfqq = RQ_CFQQ(rq);
   struct request *tmp;
-  struct task_struct *task;
-  unsigned long cpu_time_interval,cpu_time;
-  
-  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
-  *tmp = *rq;
-  task = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
-  task = find_task_by_vpid(cfqq->pid);
-  
-  if(task != NULL && task->cred->euid.val != 0){
-    cpu_time = task->utime + task->stime;
-    cpu_time_interval = cpu_time - cfqq->old_cpu_time;
-    while(tmp->bio != rq->biotail){
-      if(rq_is_sync(rq))
-        cfqq->read_io_request++;
-      tmp->bio = tmp->bio->bi_next;
-    }
-    if(rq_is_sync(rq))
-      cfqq->read_io_request++;
-    kfree(tmp);
+  struct task_struct *tsk;
 
-    /*if(cpu_time_interval > JUDGE_CPU_TIME){
-      min_freq_change(cfqq,cpu_time_interval);
-      cfqq->read_io_request = 0;
-      cfqq->old_cpu_time = cpu_time;
-    }*/
+  if(change_freq_pid != 0 && cfqq->pid == change_freq_pid){
+    cfqq->ioprio_class = IOPRIO_CLASS_RT;
   }
 
-  if(cfqq->pid == min_freq_pid && min_freq_pid != 0){
-    cfqq->ioprio_class = IOPRIO_CLASS_RT;
+  tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
+  *tmp = *rq;
+  tsk = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
+  tsk = find_task_by_vpid(cfqq->pid);
+
+  if(tsk != NULL && tsk->cred->euid.val != 0){
+    while(tmp->bio != rq->biotail){
+      if(rq_is_sync(rq)){
+        tsk->read_io_request++;
+      }
+      tmp->bio = tmp->bio->bi_next;
+    }
+    if(rq_is_sync(rq)){
+      tsk->read_io_request++;
+    }
+    kfree(tmp);
+    if(tsk->change_io_freq_flag != tsk->old_freq_flag){
+      //change_io_freq(cfqq,tsk);
+      tsk->old_freq_flag = tsk->change_io_freq_flag;
+    }
   }
 }
 /*
@@ -2480,6 +2466,7 @@ static void cfq_merged_request(struct request_queue *q, struct request *req,
 {
 	if (type == ELEVATOR_FRONT_MERGE) {
 		struct cfq_queue *cfqq = RQ_CFQQ(req);
+
     count_io_request(req);
 
 		cfq_reposition_rq_rb(cfqq, req);
@@ -3667,8 +3654,6 @@ static void cfq_init_cfqq(struct cfq_data *cfqd, struct cfq_queue *cfqq,
 		cfq_mark_cfqq_sync(cfqq);
 	}
 	cfqq->pid = pid;
-  cfqq->read_io_request = 0;
-  cfqq->old_cpu_time = 0;
 }
 
 #ifdef CONFIG_CFQ_GROUP_IOSCHED
@@ -4817,6 +4802,6 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Completely Fair Queueing IO scheduler");
 
 SYSCALL_DEFINE1(change_prio_pid,int __user *, pid){
-  get_user(min_freq_pid,pid);
+  get_user(change_freq_pid,pid);
   return 0;
 }
