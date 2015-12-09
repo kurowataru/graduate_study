@@ -2553,9 +2553,7 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 int calc_io_freq(struct task_struct *tsk,unsigned long interval){
   int io_freq;
 
-
   io_freq = tsk->read_io_request / interval;
-  printk(KERN_INFO"pid = %d, io freq = %d\n",tsk->pid,io_freq);
   tsk->read_io_request = 0;
 
   return (io_freq < 10)? 1: 0;
@@ -2574,7 +2572,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
     cpu_time = prev->utime + prev->stime;
     cpu_time_interval = cpu_time - prev->old_cpu_time;
     if(cpu_time_interval > 100){
-      prev->change_io_freq_flag = calc_io_freq(prev,cpu_time_interval);
+      prev->change_io_prio_flag = calc_io_freq(prev,cpu_time_interval);
       prev->old_cpu_time = cpu_time;
     }
   }

@@ -1780,10 +1780,10 @@ struct task_struct {
   int read_io_request;
 /* the old cpu time of the process */
   unsigned long old_cpu_time;
-/* change io frequency flag */
-  int change_io_freq_flag;
-/* old frequency flag */
-  int old_freq_flag;
+/* change io priority flag */
+  int change_io_prio_flag;
+/* old priority flag */
+  int old_prio_flag;
 /* CPU-specific state of this task */
 	struct thread_struct thread;
 /*

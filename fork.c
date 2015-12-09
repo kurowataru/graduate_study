@@ -384,8 +384,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
 /* Initializing for calculation of io frequency */
   tsk->read_io_request = 0;
   tsk->old_cpu_time = 0;
-  tsk->change_io_freq_flag = 0;
-  tsk->old_freq_flag = 0;
+  tsk->change_io_prio_flag = 0;
+  tsk->old_prio_flag = 0;
 
 	return tsk;
 
