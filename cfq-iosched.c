@@ -37,7 +37,12 @@ static int cfq_group_idle = HZ / 125;
 static const int cfq_target_latency = HZ * 3/10; /* 300 ms */
 static const int cfq_hist_divisor = 4;
 
-int change_freq_pid = 0; // minimum frequency pid
+#define MAXARRAYSIZE 1000
+int sc_change_prio_pid = 0; // change io priority by system call
+int changed_prio_pid[MAXARRAYSIZE]; // record of changed priority pid
+unsigned long changed_prio_cputime[MAXARRAYSIZE]; // record of changed priority cputime
+int changed_prio_flag[MAXARRAYSIZE]; // record of changed priority flag
+int prio_array_index = 0; // priority array index
 /*
  * offset from end of service tree
  */
@@ -940,12 +945,24 @@ static inline void cfq_schedule_dispatch(struct cfq_data *cfqd)
 	}
 }
 
-/* change io frequency */
-void change_io_freq(struct cfq_queue *cfqq,struct task_struct *tsk){
-  if(tsk->change_io_freq_flag == 1){
+/* change io priority */
+void change_io_prio(struct cfq_queue *cfqq,struct task_struct *tsk){
+  int i;
+  if(tsk->change_io_prio_flag == 1){
     cfqq->ioprio_class = IOPRIO_CLASS_RT;
   }else{
     cfqq->ioprio_class = IOPRIO_CLASS_BE;
+  }
+
+  changed_prio_pid[prio_array_index] = cfqq->pid;
+  changed_prio_cputime[prio_array_index] = tsk->utime + tsk->stime;
+  changed_prio_flag[prio_array_index] = tsk->change_io_prio_flag;
+  prio_array_index++;
+  if(prio_array_index == MAXARRAYSIZE - 1){
+    for(i = 0;i < prio_array_index;i++){
+      printk(KERN_INFO"pid = %d changed io prio to flag %d, cputime = %ld\n",changed_prio_pid[i],changed_prio_flag[i],changed_prio_cputime[i]);
+    }
+    prio_array_index = 0;
   }
 }
 /* count io request */
@@ -954,7 +971,7 @@ void count_io_request(struct request *rq){
   struct request *tmp;
   struct task_struct *tsk;
 
-  if(change_freq_pid != 0 && cfqq->pid == change_freq_pid){
+  if(sc_change_prio_pid != 0 && cfqq->pid == sc_change_prio_pid){
     cfqq->ioprio_class = IOPRIO_CLASS_RT;
   }
 
@@ -964,6 +981,10 @@ void count_io_request(struct request *rq){
   tsk = find_task_by_vpid(cfqq->pid);
 
   if(tsk != NULL && tsk->cred->euid.val != 0){
+    if(tsk->change_io_prio_flag != tsk->old_prio_flag){
+      change_io_prio(cfqq,tsk);
+      tsk->old_prio_flag = tsk->change_io_prio_flag;
+    }
     while(tmp->bio != rq->biotail){
       if(rq_is_sync(rq)){
         tsk->read_io_request++;
@@ -974,10 +995,6 @@ void count_io_request(struct request *rq){
       tsk->read_io_request++;
     }
     kfree(tmp);
-    if(tsk->change_io_freq_flag != tsk->old_freq_flag){
-      //change_io_freq(cfqq,tsk);
-      tsk->old_freq_flag = tsk->change_io_freq_flag;
-    }
   }
 }
 /*
@@ -4802,6 +4819,19 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Completely Fair Queueing IO scheduler");
 
 SYSCALL_DEFINE1(change_prio_pid,int __user *, pid){
-  get_user(change_freq_pid,pid);
+  get_user(sc_change_prio_pid,pid);
+  return 0;
+}
+
+SYSCALL_DEFINE4(changed_prio_pid_log,int __user *, pid,unsigned long __user *, cputime,int __user *, flag,int __user *, index){
+  int n;
+
+  n = copy_to_user(pid,changed_prio_pid,(sizeof(changed_prio_pid) / sizeof(changed_prio_pid[0])));
+  n = copy_to_user(cputime,changed_prio_cputime,(sizeof(changed_prio_cputime) / sizeof(changed_prio_cputime[0])));
+  n = copy_to_user(flag,changed_prio_flag,(sizeof(changed_prio_flag) / sizeof(changed_prio_flag[0])));
+  n = copy_to_user(index,&prio_array_index,sizeof(int));
+
+  prio_array_index = 0;
+
   return 0;
 }
