@@ -26,7 +26,6 @@ void readfile(char *filename,char *buff2,FILE *perfile){
     gettimeofday(&e,NULL);
     fprintf(perfile,"rt = %lf\n", (e.tv_sec - s.tv_sec) + (e.tv_usec - s.tv_usec)*1.0E-6);
     fflush(perfile);
-    system("sysctl -w vm.drop_caches=3");
   }
 }
 
@@ -58,18 +57,51 @@ int main(int argc,char **argv){
     if(m==0){
       gettimeofday(&s,NULL);
       int pid = getpid();
-      //sc_return = syscall(323,&pid);
+      sc_return = syscall(323,&pid);
       printf("calcpid:%d start\n",pid);
-      if(mode){
+      /*if(mode){
         char buff[20];  
         sprintf(buff,"%d",pid);
         char command[50] = "ionice -c 1 -n 0 -p ";
         strcat(command, buff);
         int state = system(command);
         printf("%s\n",command);
-      }
+      }*/
       for(l=0;l<Q;l++){
-        fd = open("tempfile1.txt",O_RDONLY);
+        switch(l){
+          case 0:
+            fd = open("tempfile1_0.txt",O_RDONLY);
+            break;
+          case 1:
+            fd = open("tempfile1_1.txt",O_RDONLY);
+            break;
+          case 2:
+            fd = open("tempfile1_2.txt",O_RDONLY);
+            break;
+          case 3:
+            fd = open("tempfile1_3.txt",O_RDONLY);
+            break;
+          case 4:
+            fd = open("tempfile1_4.txt",O_RDONLY);
+            break;
+          case 5:
+            fd = open("tempfile1_5.txt",O_RDONLY);
+            break;
+          case 6:
+            fd = open("tempfile1_6.txt",O_RDONLY);
+            break;
+          case 7:
+            fd = open("tempfile1_7.txt",O_RDONLY);
+            break;
+          case 8:
+            fd = open("tempfile1_8.txt",O_RDONLY);
+            break;
+          case 9:
+            fd = open("tempfile1_9.txt",O_RDONLY);
+            break;
+          default:
+            break;
+        }
         for(n=0;n<R1;n++) {
           rc = read(fd,buff,BUFSIZE);
         }
@@ -87,7 +119,6 @@ int main(int argc,char **argv){
         fflush(perfile);
         close(fd);
         printf("%d\n",l+1);
-        system("sysctl -w vm.drop_caches=3");
       }
       gettimeofday(&e,NULL);
 

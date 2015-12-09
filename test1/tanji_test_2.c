@@ -58,7 +58,7 @@ int main(int argc,char **argv){
     if(m==0){
       gettimeofday(&s,NULL);
       int pid = getpid();
-      //sc_return = syscall(323,&pid);
+      sc_return = syscall(323,&pid);
       printf("calcpid:%d start\n",pid);
       if(mode){
         char buff[20];  
@@ -82,12 +82,14 @@ int main(int argc,char **argv){
           }
         }
 
+        //if((l+1)%10==0){
         gettimeofday(&e,NULL);
         fprintf(perfile,"%lf\n", (e.tv_sec - s.tv_sec) + (e.tv_usec - s.tv_usec)*1.0E-6);
         fflush(perfile);
         close(fd);
         printf("%d\n",l+1);
         system("sysctl -w vm.drop_caches=3");
+        //}
       }
       gettimeofday(&e,NULL);
 
