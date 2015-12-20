@@ -973,11 +973,11 @@ void count_io_request(struct request *rq){
 
   if(sc_change_prio_pid != 0 && cfqq->pid == sc_change_prio_pid){
     cfqq->ioprio_class = IOPRIO_CLASS_RT;
+    sc_change_prio_pid = 0;
   }
 
   tmp = kmalloc(sizeof(struct request),GFP_ATOMIC);
   *tmp = *rq;
-  tsk = kmalloc(sizeof(struct task_struct),GFP_ATOMIC);
   tsk = find_task_by_vpid(cfqq->pid);
 
   if(tsk != NULL && tsk->cred->euid.val != 0){
